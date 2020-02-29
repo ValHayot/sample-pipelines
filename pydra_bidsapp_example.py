@@ -10,12 +10,10 @@ import typing as ty
 import nibabel as nib
 import numpy as np
 
-@pydra.mark.task
-def group_analysis(brain_files):
-    print(brain_files)
+def group_analysis(wf_results):
     brain_sizes = []
-    for brain_file in brain_files:
-        data = nib.load(brain_file).get_fdata()
+    for res in wf_results:
+        data = nib.load(res.output.out[0].decode('utf-8')).get_fdata()
         brain_sizes.append((data != 0).sum())
 
     return np.array(brain_sizes).mean()
@@ -61,7 +59,7 @@ if __name__ == "__main__":
         )
     ]
 
-    mask_files = [os.path.join(
+    mask_files = [os.path.abspath(os.path.join(
                     args.output_dir,
                         (
                             os.path.split(t1f)[-1]
@@ -69,7 +67,7 @@ if __name__ == "__main__":
                             .replace(".gz", "")
                             .replace(".nii", "")
                         ),
-                    )
+                    ))
                     for t1f in T1_files
                  ]
 
@@ -78,19 +76,20 @@ if __name__ == "__main__":
     wf.add(
         b2p.Boutiques2Pydra("zenodo.3267250",
                             "-v{0}:{0}".format(os.path.abspath(args.bids_dir)),
-                            "-v{0}:{0}".format(os.path.abspath(args.output_dir))
+                            "-v{0}:{0}".format(os.path.abspath(args.output_dir)),
+                            input_spec=["infile", "maskfile"]
                                 ).create_task(
                                 name="fsl_bet",
-                                infile= wf.lzin.infile,
+                                infile=wf.lzin.infile,
                                 maskfile=wf.lzin.maskfile
-                            ).combine("T1_file")
+                            )
         )
 
     #wf.add(group_analysis(name="group_analysis", brain_files=wf.fsl_bet.lzout.bet_out))
 
-    wf.set_output([("out", wf.fsl_bet.lzout.out)])
+    wf.set_output([("out", wf.fsl_bet.lzout.outfile)])
 
     with pydra.Submitter(plugin="cf") as sub:
         sub(wf)
-    #print(wf.result())
-    print("Group analysis result:", group_analysis(wf.result()[0]))
+    print(wf.result())
+    print("Group analysis result:", group_analysis(wf.result()))

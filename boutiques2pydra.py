@@ -2,10 +2,13 @@ from boutiques.descriptor2func import function
 from boutiques.util.utils import loadJson
 from boutiques import evaluate, example
 from json import dumps, loads
+from inspect import getsource
 import pydra
 import typing as ty
+from types import FunctionType
 import argparse
 import sys
+from os import path as op
 
 
 def descriptor_parser(descriptor):
@@ -27,30 +30,44 @@ def descriptor_parser(descriptor):
 
 class Boutiques2Pydra:
 
-    def __init__(self, descriptor, *args):
-        self.desc_json = dumps(loadJson(descriptor))
-        invocation = example(self.desc_json)
-        tool_outputs = evaluate(self.desc_json, invocation, "output-files")
+    def __init__(self, descriptor, *args, input_spec=None):
+        desc_dict = loadJson(descriptor)
+        desc_json = dumps(desc_dict)
+
+        if input_spec is None:
+            invocation = example(desc_json)
+        else:
+            invocation = example(desc_json, "-c")
+            invocation = dumps({k:v for k,v in loads(invocation).items() if k in input_spec})
+            print(invocation)
+
+        tool_outputs = evaluate(desc_json, invocation, "output-files")
         self.output_types = {k: ty.Any for k in tool_outputs.keys()}
-        self.options = args
-        print(str(self.create_task))
+        print(self.output_types)
 
+        parameters = ", ".join([k for k in loads(invocation).keys()])
+
+        self.pydra_task = r'''def pydra_task({0}):
+
+            kwargs = locals()
+            tool = function(dumps({1}))
+            ret = tool(*{2}, **kwargs)
+
+            if ret.exit_code != 0:
+                raise Exception(ret.stdout, ret.stderr)
+            
+            return [out_f.file_name.encode("utf-8") for out_f in ret.output_files]'''.format(parameters, desc_dict, list(args))
+
+        code = compile(self.pydra_task, "<string>", "exec")
+
+        self.create_task = FunctionType(code.co_consts[0], globals())
+
+        self.create_task = pydra.mark.annotate({ "return" : {"outfile": ty.Any} })(self.create_task)
         self.create_task = pydra.mark.task(self.create_task)
-        self.create_task = pydra.mark.annotate({ "return" : self.output_types })(self.create_task)
 
-
-    def create_task(self, infile, **kwargs):
-        tool = function(self.desc_json)
-        ret = tool(*self.options, **kwargs)
-
-        if ret.exit_code != 0:
-            raise Exception(ret.stdout, ret.stderr)
-        
-        print(ret)
-        return [out_f.file_name for out_f in ret.output_files]
 
 """
-@pydra.mark.task 
+@pydra.mark
 def create_task(descriptor, args, **kwargs):
     desc_json = dumps(loadJson(descriptor))
 
@@ -71,7 +88,7 @@ def create_task(descriptor, args, **kwargs):
             raise Exception(ret.stdout, ret.stderr)
         
         print(ret.output_files)
-        return [out_f.file_name for out_f in ret.output_files]
+        return [out_f for out_f in ret.output_files]
 
 
     print(kwargs)
