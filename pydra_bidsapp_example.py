@@ -2,7 +2,6 @@ import argparse
 from time import time, sleep
 import os
 from glob import glob
-import boutiques2pydra as b2p 
 
 import pydra
 import typing as ty
@@ -13,7 +12,7 @@ import numpy as np
 def group_analysis(wf_results):
     brain_sizes = []
     for res in wf_results:
-        data = nib.load(res.output.out[0].decode('utf-8')).get_fdata()
+        data = nib.load(res.output.out[0]).get_fdata()
         brain_sizes.append((data != 0).sum())
 
     return np.array(brain_sizes).mean()
@@ -74,22 +73,17 @@ if __name__ == "__main__":
     wf.split(("infile", "maskfile"), infile=T1_files, maskfile=mask_files)
 
     wf.add(
-        b2p.Boutiques2Pydra("zenodo.3267250",
+        pydra.engine.task.BoutiquesTask("zenodo.3267250", name="fsl_bet", bosh_args=[
                             "-v{0}:{0}".format(os.path.abspath(args.bids_dir)),
-                            "-v{0}:{0}".format(os.path.abspath(args.output_dir)),
-                            input_spec=["infile", "maskfile"]
-                                ).create_task(
-                                name="fsl_bet",
-                                infile=wf.lzin.infile,
-                                maskfile=wf.lzin.maskfile
+                            "-v{0}:{0}".format(os.path.abspath(args.output_dir))],
+                            infile=wf.lzin.infile,
+                            maskfile=wf.lzin.maskfile
                             )
         )
 
-    #wf.add(group_analysis(name="group_analysis", brain_files=wf.fsl_bet.lzout.bet_out))
 
-    wf.set_output([("out", wf.fsl_bet.lzout.outfile)])
+    wf.set_output([("out", wf.fsl_bet.lzout.out)])
 
     with pydra.Submitter(plugin="cf") as sub:
         sub(wf)
-    print(wf.result())
     print("Group analysis result:", group_analysis(wf.result()))
