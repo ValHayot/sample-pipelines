@@ -2,7 +2,7 @@ import argparse
 from time import time, sleep
 import os
 from glob import glob
-from boutiques.descriptor2func import function
+import boutiques2pydra as b2p 
 
 import pydra
 import typing as ty
@@ -10,11 +10,12 @@ import typing as ty
 import nibabel as nib
 import numpy as np
 
-
+@pydra.mark.task
 def group_analysis(brain_files):
+    print(brain_files)
     brain_sizes = []
     for brain_file in brain_files:
-        data = nib.load(brain_file.output.out).get_fdata()
+        data = nib.load(brain_file).get_fdata()
         brain_sizes.append((data != 0).sum())
 
     return np.array(brain_sizes).mean()
@@ -44,36 +45,11 @@ if __name__ == "__main__":
 
     wf = pydra.Workflow(
         name="BIDS App Example with Boutiques",
-        input_spec=["T1_file", "output_dir"],
-        output_dir=args.output_dir,
+        input_spec=["infile", "maskfile"]
     )
 
-    @pydra.mark.task
-    def fsl_bet_boutiques(T1_file, output_dir):
-        maskfile = os.path.join(
-            output_dir,
-            (
-                os.path.split(T1_file)[-1]
-                .replace("_T1w", "_brain")
-                .replace(".gz", "")
-                .replace(".nii", "")
-            ),
-        )
-        fsl_bet = function("zenodo.3267250")
-        ret = fsl_bet(
-            "-v{0}:{0}".format(T1_file.split('sub-')[0]),
-            "-v{0}:{0}".format(output_dir),
-            infile=T1_file,
-            maskfile=maskfile,
-        )
-
-        if ret.exit_code != 0:
-            raise Exception(ret.stdout, ret.stderr)
-
-        return ret.output_files[0].file_name
-
     T1_files = [
-        T1_file
+        os.path.abspath(T1_file)
         for subject_label in subjects_to_analyze
         for T1_file in glob(
             os.path.join(args.bids_dir, "sub-%s" % subject_label, "anat", "*_T1w.nii*")
@@ -85,17 +61,36 @@ if __name__ == "__main__":
         )
     ]
 
-    wf.split("T1_file", T1_file=T1_files)
+    mask_files = [os.path.join(
+                    args.output_dir,
+                        (
+                            os.path.split(t1f)[-1]
+                            .replace("_T1w", "_brain")
+                            .replace(".gz", "")
+                            .replace(".nii", "")
+                        ),
+                    )
+                    for t1f in T1_files
+                 ]
+
+    wf.split(("infile", "maskfile"), infile=T1_files, maskfile=mask_files)
 
     wf.add(
-        fsl_bet_boutiques(
-            name="fsl_bet", T1_file=wf.lzin.T1_file, output_dir=wf.lzin.output_dir
+        b2p.Boutiques2Pydra("zenodo.3267250",
+                            "-v{0}:{0}".format(os.path.abspath(args.bids_dir)),
+                            "-v{0}:{0}".format(os.path.abspath(args.output_dir))
+                                ).create_task(
+                                name="fsl_bet",
+                                infile= wf.lzin.infile,
+                                maskfile=wf.lzin.maskfile
+                            ).combine("T1_file")
         )
-    )
 
-    wf.combine("T1_file")
+    #wf.add(group_analysis(name="group_analysis", brain_files=wf.fsl_bet.lzout.bet_out))
+
     wf.set_output([("out", wf.fsl_bet.lzout.out)])
 
     with pydra.Submitter(plugin="cf") as sub:
         sub(wf)
+    #print(wf.result())
     print("Group analysis result:", group_analysis(wf.result()[0]))
